@@ -1,0 +1,816 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>水晶呼吸法練習</title>
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- React & ReactDOM -->
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+    <!-- Babel -->
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <!-- html2canvas for screenshot -->
+    <script src="https://html2canvas.hertzen.com/dist/html2canvas.min.js"></script>
+
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Noto+Serif+TC:wght@400;700&display=swap');
+
+        body {
+            font-family: 'Noto Serif TC', serif;
+            background-color: #0f172a;
+            color: #e2e8f0;
+            overflow: hidden;
+            touch-action: none;
+            user-select: none;
+        }
+
+        /* Gold Gradient Text */
+        .text-gold {
+            background: linear-gradient(to bottom, #fbfbfb 0%, #d4af37 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            text-shadow: 0px 2px 4px rgba(0,0,0,0.5);
+        }
+
+        .glass-panel {
+            background: rgba(15, 23, 42, 0.7);
+            backdrop-filter: blur(16px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+        }
+
+        /* Cursor Glow */
+        .cursor-glow {
+            filter: drop-shadow(0 0 5px #fef08a) drop-shadow(0 0 15px #facc15);
+            transition: r 0.3s ease;
+        }
+
+        /* Animations */
+        @keyframes fadeIn {
+            from { opacity: 0; transform: scale(0.98) translateY(10px); }
+            to { opacity: 1; transform: scale(1) translateY(0); }
+        }
+        .animate-fade-in {
+            animation: fadeIn 0.4s ease-out forwards;
+        }
+        
+        .breathing-container img {
+            transition: transform 0.1s linear; /* Smooth update from JS */
+        }
+
+        /* Scrollbar for presets list */
+        .custom-scrollbar::-webkit-scrollbar {
+            width: 6px;
+        }
+        .custom-scrollbar::-webkit-scrollbar-track {
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 3px;
+        }
+        .custom-scrollbar::-webkit-scrollbar-thumb {
+            background: rgba(255, 255, 255, 0.2);
+            border-radius: 3px;
+        }
+        .custom-scrollbar::-webkit-scrollbar-thumb:hover {
+            background: rgba(255, 255, 255, 0.3);
+        }
+        
+        /* Pulse animation for Resume button */
+        @keyframes pulse-ring {
+            0% { transform: scale(0.8); box-shadow: 0 0 0 0 rgba(250, 204, 21, 0.7); }
+            70% { transform: scale(1); box-shadow: 0 0 0 10px rgba(250, 204, 21, 0); }
+            100% { transform: scale(0.8); box-shadow: 0 0 0 0 rgba(250, 204, 21, 0); }
+        }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useRef, useMemo } = React;
+
+        // --- PRESETS DATA ---
+        const PRESETS = [
+            {
+                id: 'box',
+                name: '箱式呼吸法 (Box Breathing)',
+                desc: '海豹部隊常用，適合高壓環境下快速鎮定神經、恢復專注。',
+                settings: { inhale: 4, hold1: 4, exhale: 4, hold2: 4 }
+            },
+            {
+                id: '478',
+                name: '4-7-8 呼吸法',
+                desc: '號稱「神經系統的天然鎮靜劑」，極適合改善失眠與焦慮。',
+                settings: { inhale: 4, hold1: 7, exhale: 8, hold2: 0 }
+            },
+            {
+                id: 'coherent',
+                name: '諧振/共振呼吸法',
+                desc: '每分鐘約呼吸 5-6 次，能最大化心率變異度 (HRV)，提升抗壓性。',
+                settings: { inhale: 6, hold1: 0, exhale: 6, hold2: 0 } 
+            },
+            {
+                id: 'sama',
+                name: '等長呼吸法 (Sama Vritti)',
+                desc: '使呼吸平穩均勻，適合冥想前或日常放鬆。',
+                settings: { inhale: 4, hold1: 0, exhale: 4, hold2: 0 }
+            },
+            {
+                id: 'sigh',
+                name: '生理嘆息 (Physiological Sigh)',
+                desc: '快速排出二氧化碳，是當下緩解急性壓力的最快方法。(雙吸氣：長吸+短吸)',
+                settings: { inhale: 3, hold1: 0, exhale: 6, hold2: 0 } 
+            }
+        ];
+
+        // --- Audio Engine ---
+        class CrystalSynth {
+            constructor() {
+                this.ctx = null;
+                this.masterGain = null; 
+                this.isPlaying = false;
+                this.timeoutId = null;
+                this.noteIndex = 0;
+                this.sequence = [
+                    130.81, 146.83, 164.81, 196.00,
+                    261.63, 293.66, 329.63, 392.00,
+                    261.63, 196.00, 164.81, 146.83
+                ];
+                this.noteDuration = 800;
+            }
+
+            init() {
+                if (!this.ctx) {
+                    this.ctx = new (window.AudioContext || window.webkitAudioContext)();
+                    this.masterGain = this.ctx.createGain();
+                    this.masterGain.connect(this.ctx.destination);
+                }
+                if (this.ctx.state === 'suspended') {
+                    this.ctx.resume();
+                }
+            }
+
+            // Play background music note
+            playNote(freq) {
+                if (!this.ctx) return;
+                const t = this.ctx.currentTime;
+                const osc = this.ctx.createOscillator();
+                const gain = this.ctx.createGain();
+                osc.type = 'triangle';
+                osc.frequency.setValueAtTime(freq, t);
+                
+                const filter = this.ctx.createBiquadFilter();
+                filter.type = 'lowpass';
+                filter.frequency.setValueAtTime(600, t); 
+
+                gain.gain.setValueAtTime(0, t);
+                gain.gain.linearRampToValueAtTime(0.08, t + 0.1); 
+                gain.gain.exponentialRampToValueAtTime(0.001, t + 3.0); 
+
+                osc.connect(filter);
+                filter.connect(gain);
+                gain.connect(this.masterGain);
+                osc.start(t);
+                osc.stop(t + 3.0);
+            }
+
+            // Play Voice Cue using Web Speech API
+            playVoice(text) {
+                if (!('speechSynthesis' in window)) return;
+                
+                // Cancel any currently speaking utterances
+                window.speechSynthesis.cancel();
+
+                const utterance = new SpeechSynthesisUtterance(text);
+                utterance.lang = 'zh-TW';
+                utterance.rate = 0.9; // Slightly slower for calmness
+                utterance.pitch = 1.0;
+                utterance.volume = 1.0; // Voice volume
+
+                window.speechSynthesis.speak(utterance);
+            }
+
+            // Play Phase Cue (Sound or Voice)
+            playCue(phase, type) {
+                // If Muted (masterGain is effectively 0), strictly don't play
+                
+                if (type === 'voice') {
+                    let text = '';
+                    if (phase === 'inhale') text = '吸氣';
+                    else if (phase === 'exhale') text = '吐氣';
+                    else if (phase.includes('hold')) text = '停一下';
+                    
+                    if (text) this.playVoice(text);
+                    return;
+                }
+
+                // If type is 'sound'
+                if (!this.ctx || !this.masterGain) return;
+                const t = this.ctx.currentTime;
+                
+                const osc = this.ctx.createOscillator();
+                const gain = this.ctx.createGain();
+                
+                osc.type = 'sine'; 
+                gain.connect(this.masterGain);
+                osc.connect(gain);
+
+                if (phase === 'inhale') {
+                    // Rising Tone
+                    osc.frequency.setValueAtTime(300, t);
+                    osc.frequency.exponentialRampToValueAtTime(500, t + 0.6);
+                    
+                    gain.gain.setValueAtTime(0, t);
+                    gain.gain.linearRampToValueAtTime(0.2, t + 0.1);
+                    gain.gain.linearRampToValueAtTime(0, t + 0.6);
+                    
+                    osc.start(t);
+                    osc.stop(t + 0.6);
+                } 
+                else if (phase === 'exhale') {
+                    // Falling Tone
+                    osc.frequency.setValueAtTime(500, t);
+                    osc.frequency.exponentialRampToValueAtTime(300, t + 0.6);
+                    
+                    gain.gain.setValueAtTime(0, t);
+                    gain.gain.linearRampToValueAtTime(0.2, t + 0.1);
+                    gain.gain.linearRampToValueAtTime(0, t + 0.6);
+
+                    osc.start(t);
+                    osc.stop(t + 0.6);
+                } 
+                else if (phase.includes('hold')) {
+                    // Ping
+                    osc.frequency.setValueAtTime(660, t); 
+                    
+                    gain.gain.setValueAtTime(0, t);
+                    gain.gain.linearRampToValueAtTime(0.15, t + 0.05);
+                    gain.gain.exponentialRampToValueAtTime(0.001, t + 1.0);
+
+                    osc.start(t);
+                    osc.stop(t + 1.0);
+                }
+            }
+
+            nextNote = () => {
+                if (!this.isPlaying) return;
+                const freq = this.sequence[this.noteIndex];
+                this.playNote(freq);
+                this.noteIndex = (this.noteIndex + 1) % this.sequence.length;
+                this.timeoutId = setTimeout(this.nextNote, this.noteDuration);
+            }
+
+            start() {
+                this.init();
+                if (this.masterGain) {
+                    this.masterGain.gain.cancelScheduledValues(this.ctx.currentTime);
+                    this.masterGain.gain.setValueAtTime(1, this.ctx.currentTime);
+                }
+                if (this.isPlaying) return;
+                this.isPlaying = true;
+                this.noteIndex = 0;
+                this.nextNote();
+            }
+
+            stop() {
+                this.isPlaying = false;
+                if (this.timeoutId) clearTimeout(this.timeoutId);
+                // Silence Music
+                if (this.masterGain && this.ctx) {
+                    this.masterGain.gain.cancelScheduledValues(this.ctx.currentTime);
+                    this.masterGain.gain.setTargetAtTime(0, this.ctx.currentTime, 0.05);
+                }
+                // Silence Voice
+                if ('speechSynthesis' in window) {
+                    window.speechSynthesis.cancel();
+                }
+            }
+        }
+        const audioSynth = new CrystalSynth();
+
+        // --- UI Helper: Mute Button ---
+        const MuteBtn = ({ isMuted, onToggle, className }) => (
+            <button 
+                onClick={onToggle} 
+                className={`p-2 rounded-full bg-white/10 hover:bg-white/20 transition-all border border-white/10 flex items-center justify-center text-white/80 hover:text-white ${className}`}
+                title={isMuted ? "開啟音樂" : "關閉音樂"}>
+                {isMuted ? (
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><line x1="23" y1="9" x2="17" y2="15"/><line x1="17" y1="9" x2="23" y2="15"/></svg>
+                ) : (
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"/></svg>
+                )}
+            </button>
+        );
+
+        // --- Main Component ---
+        const App = () => {
+            const [view, setView] = useState('setup');
+            const [setupMode, setSetupMode] = useState('presets');
+            const [cueType, setCueType] = useState('sound'); // 'sound' or 'voice'
+            const [isMuted, setIsMuted] = useState(false);
+            const [isPaused, setIsPaused] = useState(false);
+            
+            const [currentSettings, setCurrentSettings] = useState({
+                inhale: 4, hold1: 4, exhale: 4, hold2: 4
+            });
+            const [activePresetInfo, setActivePresetInfo] = useState(null);
+
+            const [timerText, setTimerText] = useState("00:00");
+            const [finishTime, setFinishTime] = useState(null);
+            
+            // Refs for animation loop
+            const stateRef = useRef({
+                totalAccumulatedTime: 0, 
+                phase: 'inhale', 
+                phaseTime: 0, 
+                settings: currentSettings,
+                isPaused: false,
+                cueType: cueType
+            });
+            
+            const [visualState, setVisualState] = useState({
+                phase: 'inhale',
+                progress: 0, 
+                scale: 1
+            });
+
+            const lastPhaseRef = useRef('inhale');
+
+            useEffect(() => {
+                stateRef.current.settings = currentSettings;
+            }, [currentSettings]);
+
+            useEffect(() => {
+                stateRef.current.isPaused = isPaused;
+            }, [isPaused]);
+
+            useEffect(() => {
+                stateRef.current.cueType = cueType;
+            }, [cueType]);
+
+            // --- Audio Effect ---
+            useEffect(() => {
+                if (view === 'practice' && !isMuted && !isPaused) {
+                    audioSynth.start();
+                } else {
+                    audioSynth.stop();
+                }
+            }, [view, isMuted, isPaused]);
+
+            // --- Animation Loop ---
+            useEffect(() => {
+                let animationFrameId;
+                if (view === 'practice') {
+                    // Initialize
+                    stateRef.current.totalAccumulatedTime = 0;
+                    stateRef.current.phase = 'inhale';
+                    stateRef.current.phaseTime = 0;
+                    stateRef.current.isPaused = false;
+                    lastPhaseRef.current = ''; 
+                    setIsPaused(false);
+                    
+                    let lastTime = Date.now();
+
+                    const loop = () => {
+                        const now = Date.now();
+                        
+                        // Handle Pause
+                        if (stateRef.current.isPaused) {
+                            lastTime = now; 
+                            animationFrameId = requestAnimationFrame(loop);
+                            return; 
+                        }
+
+                        const dt = (now - lastTime) / 1000;
+                        lastTime = now;
+
+                        // 1. Timer
+                        stateRef.current.totalAccumulatedTime += dt;
+                        const totalElapsed = Math.floor(stateRef.current.totalAccumulatedTime);
+                        const minStr = Math.floor(totalElapsed / 60).toString().padStart(2, '0');
+                        const secStr = (totalElapsed % 60).toString().padStart(2, '0');
+                        setTimerText(`${minStr}:${secStr}`);
+
+                        // 2. Breathing Phase Logic
+                        const cfg = stateRef.current.settings;
+                        stateRef.current.phaseTime += dt;
+
+                        const getDuration = (p) => {
+                            if (p === 'inhale') return cfg.inhale;
+                            if (p === 'hold1') return cfg.hold1;
+                            if (p === 'exhale') return cfg.exhale;
+                            if (p === 'hold2') return cfg.hold2;
+                            return 1;
+                        };
+
+                        const getNextPhase = (p) => {
+                            if (p === 'inhale') return 'hold1';
+                            if (p === 'hold1') return 'exhale';
+                            if (p === 'exhale') return 'hold2';
+                            if (p === 'hold2') return 'inhale';
+                            return 'inhale';
+                        };
+
+                        let currentDuration = getDuration(stateRef.current.phase);
+
+                        // If time exceeded for current phase, switch to next valid non-zero phase
+                        if (stateRef.current.phaseTime >= currentDuration) {
+                            stateRef.current.phaseTime = 0;
+                            
+                            let nextPhase = getNextPhase(stateRef.current.phase);
+                            
+                            // Immediately skip 0s durations to prevent playing cue for them
+                            let safety = 0;
+                            while (getDuration(nextPhase) <= 0.05 && safety < 5) {
+                                nextPhase = getNextPhase(nextPhase);
+                                safety++;
+                            }
+                            
+                            stateRef.current.phase = nextPhase;
+                            // Recalculate duration for the new phase so progress isn't broken for this frame
+                            currentDuration = getDuration(stateRef.current.phase);
+                        }
+
+                        // Play Sound Cue if phase changed
+                        if (stateRef.current.phase !== lastPhaseRef.current) {
+                            if (!isMuted) {
+                                audioSynth.playCue(stateRef.current.phase, stateRef.current.cueType);
+                            }
+                            lastPhaseRef.current = stateRef.current.phase;
+                        }
+
+                        // 3. Progress
+                        const p = Math.min(stateRef.current.phaseTime / currentDuration, 1);
+                        
+                        // 4. Scale Calculation
+                        let scale = 1;
+                        if (stateRef.current.phase === 'inhale') scale = 1 + (0.2 * p);
+                        else if (stateRef.current.phase === 'hold1') scale = 1.2;
+                        else if (stateRef.current.phase === 'exhale') scale = 1.2 - (0.2 * p);
+                        else scale = 1;
+
+                        setVisualState({
+                            phase: stateRef.current.phase,
+                            progress: p,
+                            scale: scale
+                        });
+
+                        animationFrameId = requestAnimationFrame(loop);
+                    };
+
+                    loop();
+                }
+                return () => {
+                    cancelAnimationFrame(animationFrameId);
+                    audioSynth.stop(); 
+                };
+            }, [view, isMuted]); 
+
+            // --- Handlers ---
+            const handleStartPreset = (preset) => {
+                setCurrentSettings(preset.settings);
+                setActivePresetInfo({ name: preset.name, desc: preset.desc });
+                setView('practice');
+            };
+
+            const handleStartCustom = () => {
+                setActivePresetInfo({ name: '自定義頻率', desc: '依照您的個人設定進行練習' });
+                setView('practice');
+            };
+
+            const handleStop = () => {
+                setFinishTime(new Date());
+                setView('finished');
+            };
+
+            const togglePause = () => {
+                setIsPaused(prev => !prev);
+            };
+
+            const handleScreenshot = async () => {
+                const element = document.getElementById('finished-card');
+                if (!element) return;
+                try {
+                    const canvas = await html2canvas(element, {
+                        backgroundColor: '#0f172a',
+                        scale: 4,
+                        useCORS: true,
+                        logging: false
+                    });
+                    const link = document.createElement('a');
+                    link.download = `breathing-record-${new Date().getTime()}.png`;
+                    link.href = canvas.toDataURL('image/png', 1.0);
+                    link.click();
+                } catch (err) { alert("截圖失敗"); }
+            };
+
+            // --- Logic: Cursor ---
+            const getCursorPos = () => {
+                const { phase, progress } = visualState;
+                const min = 10;
+                const max = 90;
+                const lerp = (a, b, t) => a + (b - a) * t;
+
+                if (phase === 'inhale') {
+                    if (progress < 0.5) {
+                        const t = progress * 2;
+                        return { x: lerp(min, max, t), y: min };
+                    } else {
+                        const t = (progress - 0.5) * 2;
+                        return { x: max, y: lerp(min, max, t) };
+                    }
+                }
+                if (phase === 'hold1') return { x: max, y: max };
+                if (phase === 'exhale') {
+                     if (progress < 0.5) {
+                        const t = progress * 2;
+                        return { x: lerp(max, min, t), y: max };
+                    } else {
+                        const t = (progress - 0.5) * 2;
+                        return { x: min, y: lerp(max, min, t) };
+                    }
+                }
+                if (phase === 'hold2') return { x: min, y: min };
+                return { x: min, y: min };
+            };
+
+            const getPhaseLabel = () => {
+                if (isPaused) return "暫停中";
+                switch(visualState.phase) {
+                    case 'inhale': return '吸氣';
+                    case 'hold1':  return '暫停';
+                    case 'exhale': return '吐氣';
+                    case 'hold2':  return '暫停';
+                    default: return '';
+                }
+            };
+
+            const cursorPos = getCursorPos();
+
+            // --- Calculate BPM ---
+            const calculateBPM = () => {
+                const totalCycle = currentSettings.inhale + currentSettings.hold1 + currentSettings.exhale + currentSettings.hold2;
+                if (totalCycle <= 0) return 0;
+                return (60 / totalCycle).toFixed(1);
+            };
+
+            // --- Render ---
+            return (
+                <div className="w-full h-screen relative flex flex-col items-center justify-center">
+                    
+                    {/* Background */}
+                    <div className="absolute inset-0 bg-gradient-to-b from-slate-900 via-[#1a1b4b] to-slate-900 -z-20"></div>
+                    <div className="absolute inset-0 opacity-30 -z-10" 
+                         style={{backgroundImage: 'radial-gradient(2px 2px at 20px 30px, #eee, rgba(0,0,0,0)), radial-gradient(2px 2px at 40px 70px, #fff, rgba(0,0,0,0)), radial-gradient(2px 2px at 50px 160px, #ddd, rgba(0,0,0,0)), radial-gradient(2px 2px at 90px 40px, #fff, rgba(0,0,0,0)), radial-gradient(2px 2px at 130px 80px, #fff, rgba(0,0,0,0)), radial-gradient(2px 2px at 160px 120px, #ddd, rgba(0,0,0,0))', backgroundSize: '200px 200px'}}>
+                    </div>
+
+                    {/* --- SETUP SCREEN --- */}
+                    {view === 'setup' && (
+                        <div className="glass-panel rounded-2xl w-full max-w-2xl h-[85vh] flex flex-col animate-fade-in z-10 mx-4 overflow-hidden relative">
+                            <div className="absolute top-6 right-6 z-20">
+                                <MuteBtn isMuted={isMuted} onToggle={() => setIsMuted(!isMuted)} />
+                            </div>
+
+                            <div className="p-6 border-b border-white/10 text-center shrink-0">
+                                <h1 className="text-3xl font-bold bg-gradient-to-r from-amber-200 to-amber-500 bg-clip-text text-transparent mb-6">
+                                    水晶呼吸法練習
+                                </h1>
+                                
+                                {/* Mode Toggles */}
+                                <div className="flex p-1 bg-black/40 rounded-xl mb-4">
+                                    <button 
+                                        onClick={() => setSetupMode('presets')}
+                                        className={`flex-1 py-2 rounded-lg font-bold transition-all ${setupMode === 'presets' ? 'bg-slate-700 text-yellow-400 shadow' : 'text-slate-400 hover:text-white'}`}>
+                                        精選呼吸法
+                                    </button>
+                                    <button 
+                                        onClick={() => setSetupMode('custom')}
+                                        className={`flex-1 py-2 rounded-lg font-bold transition-all ${setupMode === 'custom' ? 'bg-slate-700 text-yellow-400 shadow' : 'text-slate-400 hover:text-white'}`}>
+                                        自定義頻率
+                                    </button>
+                                </div>
+
+                                {/* Cue Type Toggle */}
+                                <div className="flex justify-center items-center gap-4 text-sm text-blue-200/80">
+                                    <span className="opacity-70">提示音類型：</span>
+                                    <div className="flex bg-slate-800/60 p-1 rounded-lg">
+                                        <button 
+                                            onClick={() => setCueType('sound')}
+                                            className={`px-4 py-1 rounded-md transition-all ${cueType === 'sound' ? 'bg-indigo-500 text-white shadow' : 'text-slate-400 hover:text-white'}`}>
+                                            🎵 音效
+                                        </button>
+                                        <button 
+                                            onClick={() => setCueType('voice')}
+                                            className={`px-4 py-1 rounded-md transition-all ${cueType === 'voice' ? 'bg-indigo-500 text-white shadow' : 'text-slate-400 hover:text-white'}`}>
+                                            🗣️ 語音
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div className="flex-1 overflow-y-auto p-6 custom-scrollbar">
+                                {setupMode === 'presets' && (
+                                    <div className="grid gap-4">
+                                        {PRESETS.map(preset => (
+                                            <div key={preset.id} 
+                                                 onClick={() => handleStartPreset(preset)}
+                                                 className="group bg-white/5 hover:bg-white/10 border border-white/5 hover:border-yellow-500/30 p-4 rounded-xl cursor-pointer transition-all duration-300 transform hover:-translate-y-1">
+                                                <div className="flex justify-between items-start mb-2">
+                                                    <h3 className="text-xl font-bold text-yellow-100 group-hover:text-yellow-400 transition-colors">
+                                                        {preset.name}
+                                                    </h3>
+                                                    <span className="text-xs font-mono text-slate-400 bg-black/30 px-2 py-1 rounded">
+                                                        {preset.settings.inhale}-{preset.settings.hold1}-{preset.settings.exhale}-{preset.settings.hold2}
+                                                    </span>
+                                                </div>
+                                                <p className="text-sm text-blue-100/70 leading-relaxed">
+                                                    {preset.desc}
+                                                </p>
+                                            </div>
+                                        ))}
+                                    </div>
+                                )}
+
+                                {setupMode === 'custom' && (
+                                    <div className="space-y-8 py-4">
+                                        <div className="space-y-6 text-blue-100">
+                                            <SettingRow label="吸氣 (秒)" value={currentSettings.inhale} options={[3,4,5,6,7,8]} 
+                                                onChange={v => setCurrentSettings(s => ({...s, inhale: v}))} />
+                                            {/* Updated Hold1 options to include 5, 6, 8 */}
+                                            <SettingRow label="暫停 (秒)" value={currentSettings.hold1} options={[0,1,2,3,4,5,6,7,8]} 
+                                                onChange={v => setCurrentSettings(s => ({...s, hold1: v}))} />
+                                            <SettingRow label="吐氣 (秒)" value={currentSettings.exhale} options={[4,5,6,7,8]} 
+                                                onChange={v => setCurrentSettings(s => ({...s, exhale: v}))} />
+                                            <SettingRow label="暫停 (秒)" value={currentSettings.hold2} options={[0,1,2,3,4,5,6,7,8]} 
+                                                onChange={v => setCurrentSettings(s => ({...s, hold2: v}))} />
+                                        </div>
+
+                                        <div className="bg-blue-900/20 p-4 rounded-lg border border-blue-500/20 text-sm text-blue-200">
+                                            <p>💡 提示：若將「暫停」設為 0 秒，系統會自動跳過該階段。</p>
+                                        </div>
+
+                                        <button onClick={handleStartCustom} 
+                                            className="w-full py-4 bg-gradient-to-r from-indigo-500 to-purple-600 rounded-xl font-bold text-lg shadow-lg hover:shadow-indigo-500/40 hover:scale-[1.02] transition-all">
+                                            開始練習
+                                        </button>
+                                    </div>
+                                )}
+                            </div>
+                        </div>
+                    )}
+
+                    {/* --- PRACTICE SCREEN --- */}
+                    {view === 'practice' && (
+                        <div className="w-full h-full relative flex items-center justify-center animate-fade-in">
+                            <button onClick={() => setView('setup')} className="absolute top-6 left-6 text-white/60 hover:text-white flex items-center gap-2 z-20">
+                                <svg width="24" height="24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M15 18l-6-6 6-6"/></svg>
+                                返回
+                            </button>
+                            
+                            <div className="absolute top-6 left-1/2 -translate-x-1/2 text-center w-full max-w-md px-4 z-10 pointer-events-none">
+                                <h2 className="text-xl font-bold text-yellow-100 drop-shadow-md">{activePresetInfo?.name}</h2>
+                                <p className="text-xs text-blue-200/80 mt-1 drop-shadow-md truncate">{activePresetInfo?.desc}</p>
+                            </div>
+
+                            <div className="absolute top-6 right-6 flex items-center gap-4 z-20">
+                                <MuteBtn isMuted={isMuted} onToggle={() => setIsMuted(!isMuted)} />
+                                <div className="font-mono text-4xl font-bold text-gold drop-shadow-lg">
+                                    {timerText}
+                                </div>
+                            </div>
+
+                            <div className="relative w-[340px] h-[340px] md:w-[450px] md:h-[450px]">
+                                <svg className="absolute inset-0 w-full h-full overflow-visible">
+                                    <rect x="10%" y="10%" width="80%" height="80%" rx="30" 
+                                          fill="none" stroke="rgba(255,255,255,0.15)" strokeWidth="4" />
+                                    <text x="50%" y="8%" textAnchor="middle" fill="rgba(255,255,255,0.3)" fontSize="12">吸氣</text>
+                                    <text x="50%" y="95%" textAnchor="middle" fill="rgba(255,255,255,0.3)" fontSize="12">吐氣</text>
+                                    
+                                    <circle cx={`${cursorPos.x}%`} cy={`${cursorPos.y}%`} 
+                                            r={visualState.phase.includes('hold') ? 12 : 8} 
+                                            fill="#fef08a" className="cursor-glow" 
+                                            style={{ opacity: visualState.phase.includes('hold') ? 0.8 : 1 }}
+                                            />
+                                </svg>
+                                <div className="absolute inset-0 flex items-center justify-center breathing-container">
+                                    <div className="w-[60%] h-[60%] rounded-full overflow-hidden border-4 border-white/20 shadow-2xl relative"
+                                         style={{ transform: `scale(${visualState.scale})` }}>
+                                        <img src="001.jpg" alt="Focus" 
+                                             onError={(e) => e.target.src='https://via.placeholder.com/400/1e1b4b/fef3c7?text=Focus'}
+                                             className="w-full h-full object-cover" />
+                                        <div className="absolute inset-0 bg-black/30 flex items-center justify-center backdrop-blur-[1px]">
+                                            <span className={`text-4xl font-bold text-white tracking-widest drop-shadow-xl ${isPaused ? 'animate-pulse' : ''}`}>
+                                                {getPhaseLabel()}
+                                            </span>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div className="absolute bottom-10 flex gap-4 z-20 w-full max-w-md px-4 justify-center">
+                                {/* Pause Button */}
+                                <button 
+                                    onClick={togglePause}
+                                    className={`px-8 py-3 rounded-full font-bold shadow-lg transition-all flex items-center gap-2 ${
+                                        isPaused 
+                                        ? 'bg-blue-600 hover:bg-blue-500 scale-105 ring-4 ring-blue-500/30' 
+                                        : 'bg-amber-500/20 hover:bg-amber-500/30 border border-amber-500/30'
+                                    }`}>
+                                    {isPaused ? (
+                                        <>
+                                            <svg width="20" height="20" fill="currentColor" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
+                                            繼續練習
+                                        </>
+                                    ) : (
+                                        <>
+                                            <svg width="20" height="20" fill="currentColor" viewBox="0 0 24 24"><path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/></svg>
+                                            暫停一下
+                                        </>
+                                    )}
+                                </button>
+                                
+                                <button onClick={handleStop} 
+                                    className="px-8 py-3 bg-gradient-to-r from-emerald-600 to-teal-700 rounded-full font-bold shadow-lg hover:scale-105 transition border border-emerald-500/30">
+                                    完成練習
+                                </button>
+                            </div>
+                        </div>
+                    )}
+
+                    {/* --- FINISHED SCREEN --- */}
+                    {view === 'finished' && (
+                        <div className="w-full flex flex-col items-center justify-center p-4">
+                            <div id="finished-card" className="glass-panel p-10 rounded-2xl text-center max-w-lg animate-fade-in z-10 w-full relative overflow-hidden">
+                                <div className="absolute top-4 right-4 z-20">
+                                    <MuteBtn isMuted={isMuted} onToggle={() => setIsMuted(!isMuted)} />
+                                </div>
+
+                                <div className="absolute inset-0 bg-gradient-to-br from-indigo-500/20 to-purple-500/20 pointer-events-none"></div>
+
+                                <div className="mb-6 inline-block p-4 bg-yellow-400/20 rounded-full relative z-10">
+                                    <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="#fbbf24" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14 9V5a3 3 0 0 0-3-3l-4 9v11h11.28a2 2 0 0 0 2-1.7l1.38-9a2 2 0 0 0-2-2.3zM7 22H4a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2h3"/></svg>
+                                </div>
+                                <h2 className="text-2xl md:text-3xl font-bold mb-4 leading-relaxed relative z-10">
+                                    我真棒，又增加了有趣的經驗！！<br/>
+                                    <span className="text-yellow-400">下次會更棒！</span>
+                                </h2>
+                                <div className="text-5xl font-mono text-gold font-bold my-4 relative z-10">{timerText}</div>
+                                
+                                {/* NEW BPM DISPLAY */}
+                                <div className="mb-6 relative z-10">
+                                     <div className="inline-flex items-baseline gap-2 px-4 py-2 bg-white/5 rounded-lg border border-white/10">
+                                        <span className="text-blue-200/70 text-sm">平均呼吸頻率</span>
+                                        <span className="text-2xl font-bold text-yellow-400 font-mono">{calculateBPM()}</span>
+                                        <span className="text-blue-200/70 text-xs">次/分</span>
+                                    </div>
+                                </div>
+
+                                <div className="text-blue-100/80 text-lg mb-2 relative z-10 font-mono tracking-wider">
+                                    {finishTime && finishTime.toLocaleString('zh-TW', {
+                                        year: 'numeric', month: '2-digit', day: '2-digit', 
+                                        hour: '2-digit', minute: '2-digit', hour12: false
+                                    })}
+                                </div>
+                                
+                                <p className="text-blue-200/60 text-sm relative z-10">
+                                    {activePresetInfo?.name} 練習記錄
+                                </p>
+                            </div>
+
+                            <div className="mt-8 flex gap-4 w-full max-w-lg">
+                                <button onClick={() => setView('setup')} 
+                                    className="flex-1 py-3 border border-white/20 rounded-xl hover:bg-white/10 transition">
+                                    回到設定
+                                </button>
+                                <button onClick={handleScreenshot} 
+                                    className="flex-1 py-3 bg-white/10 hover:bg-white/20 border border-white/10 rounded-xl transition flex items-center justify-center gap-2">
+                                    <svg width="20" height="20" fill="none" stroke="currentColor" strokeWidth="2"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>
+                                    保存記錄
+                                </button>
+                            </div>
+                        </div>
+                    )}
+                </div>
+            );
+        };
+
+        const SettingRow = ({label, value, options, onChange}) => (
+            <div className="flex flex-col gap-2">
+                <span className="text-lg">{label}</span>
+                <div className="flex flex-wrap gap-2">
+                    {options.map(opt => (
+                        <button key={opt} onClick={() => onChange(opt)}
+                            className={`px-3 py-2 rounded-md font-bold transition-all border border-transparent ${value === opt ? 'bg-yellow-500 text-slate-900 shadow-md transform scale-105' : 'bg-slate-700/50 text-slate-400 hover:bg-slate-600 hover:text-white border-white/5'}`}>
+                            {opt}
+                        </button>
+                    ))}
+                </div>
+            </div>
+        );
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
